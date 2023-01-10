@@ -52,7 +52,8 @@ export interface ExtendOptions {
     // Enable or not, the default is true
     // 是否启用, 默认true
     enable?: boolean
-    // Only files in the specified directory will take effect. If not specified, all files will take effect
+    // Only files in the specified directory will take effect. 
+    // If not specified, all files will take effect
     // 指定目录下的文件才会生效，如果不指定，则全部生效
     dirs?: string[]
     // This parameter only takes effect when there is no attribute name.
