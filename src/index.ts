@@ -26,10 +26,11 @@ const getCode = (code: string, name: string | true, lang: string | true) => {
 
 function supportVueSetupName(code: string, id: string, strategy?: string) {
     const { descriptor } = parse(code, { ignoreEmpty: false })
+    let lang:string | true = ''
     if (!descriptor.script && descriptor.scriptSetup) {
         const result = compileScript(descriptor, { id })
         const name = result.attrs.name
-        const lang = result.attrs.lang
+        lang = result.attrs.lang
         if (name) {
             return getCode(code, name, lang)
         }
@@ -38,9 +39,9 @@ function supportVueSetupName(code: string, id: string, strategy?: string) {
     if (strategy) {
         switch (strategy) {
             case 'dir':
-                return getCode(code, path.basename(path.dirname(id)), 'js')
+                return getCode(code, path.basename(path.dirname(id)), lang)
             case 'file':
-                return getCode(code, path.basename(id).replace(path.extname(id), ''), 'js')
+                return getCode(code, path.basename(id).replace(path.extname(id), ''), lang)
         }
     }
 
