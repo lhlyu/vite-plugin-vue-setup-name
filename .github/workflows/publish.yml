@@ -5,13 +5,14 @@ on:
     branches:
       - master
 
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     environment: Release
-    permissions:
-      contents: write
-      id-token: write
 
     steps:
       - name: 检出代码
@@ -39,7 +40,7 @@ jobs:
         run: bun run build
 
       - name: 发布版本
-        run: NPM_CONFIG_TOKEN=${{secrets.SECRET_NPM_TOKEN}} bun publish --provenance --no-git-checks --access=public --tag ${{ env.tag }}
+        run: bun publish --tag ${{ env.tag }}
 
       - name: 打个标签
         uses: ncipollo/release-action@v1
