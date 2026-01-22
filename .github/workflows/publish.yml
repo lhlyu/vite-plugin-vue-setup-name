@@ -18,6 +18,12 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v5
 
+      - name: 设置 Node.js 环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: '25'
+          registry-url: 'https://registry.npmjs.org'
+
       - name: 安装包子
         uses: oven-sh/setup-bun@v2
 
@@ -40,7 +46,7 @@ jobs:
         run: bun run build
 
       - name: 发布版本
-        run: bunx npm publish --provenance --tag ${{ env.tag }}
+        run: bunx npm publish --tag ${{ env.tag }} --provenance
 
       - name: 打个标签
         uses: ncipollo/release-action@v1
