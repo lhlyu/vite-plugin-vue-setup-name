@@ -1,22 +1,63 @@
-name: Publish to NPM
+name: Publish Package
+
 on:
-  release:
-    types: [created]
+  push:
+    branches:
+      - main
 
 jobs:
-  build:
+  publish:
     runs-on: ubuntu-latest
+    environment: Release
+    permissions:
+      contents: write
+      id-token: write
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Setup Node
-        uses: actions/setup-node@v2
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 安装Pnpm
+        uses: pnpm/action-setup@v4
         with:
-          node-version: '14.x'
+          version: 10
+
+      - name: 设置Node的版本
+        uses: actions/setup-node@v5
+        with:
+          node-version: 25
           registry-url: 'https://registry.npmjs.org'
-      - name: Install dependencies and build 🔧
-        run: npm install && npm run build
-      - name: Publish package on NPM 📦
-        run: npm publish
+          cache: 'pnpm'
+
+      - name: 获取当前的版本号
+        run: |
+          echo "version=$(jq -r '.version' package.json)" >> "$GITHUB_ENV"
+          echo "tag=$(jq -r '.version | (capture("-(?<tag>[^.]+)") // {}) | .tag // "latest"' package.json)" >> "$GITHUB_ENV"
+          echo "prerelease=$(jq -r '.version | test("-")' package.json)" >> "$GITHUB_ENV"
+
+      - name: 打印信息
+        run: |
+          echo "version: ${{ env.version }}"
+          echo "tag: ${{ env.tag }}"
+          echo "prerelease: ${{ env.prerelease }}"
+
+      - name: 安装依赖
+        run: pnpm i
+
+      - name: 构建代码
+        run: pnpm build
+
+      - name: 发布版本
+        run: pnpm publish --provenance --no-git-checks --access=public --tag ${{ env.tag }}
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.SECRET_NPM_TOKEN }}
+          NODE_AUTH_TOKEN: '${{secrets.SECRET_NPM_TOKEN}}'
+
+      - name: 打个标签
+        uses: ncipollo/release-action@v1
+        with:
+          tag: 'v${{ env.version }}'
+          draft: false
+          prerelease: ${{ env.prerelease }}
+          allowUpdates: true
+          generateReleaseNotes: true
+          token: ${{ secrets.GITHUB_TOKEN }}

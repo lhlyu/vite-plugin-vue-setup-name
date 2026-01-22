@@ -1,18 +1,20 @@
 # vite-plugin-vue-setup-name
+
 Make the vue script setup syntax support the name attribute
 
 使`vue setup`语法支持`name`属性
 
-## Install 
+## Install
 
 `npm i -D vite-plugin-vue-setup-name`
 
-`pnpm add -D vite-plugin-vue-setup-name`
-
 `yarn add -D vite-plugin-vue-setup-name`
 
-## Usage 
+`pnpm add -D vite-plugin-vue-setup-name`
 
+`bun add -D vite-plugin-vue-setup-name`
+
+## Usage
 
 - vite.config.ts
 
@@ -23,27 +25,25 @@ import VitePluginVueSetupName from 'vite-plugin-vue-setup-name'
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [
-      vue(), 
-      VitePluginVueSetupName({
-          enable: true,
-          dirs: ['./src/components']
-      })
-  ],
+    plugins: [
+        vue(),
+        VitePluginVueSetupName({
+            enable: true,
+            dirs: ['./src/components'],
+        }),
+    ],
 })
-
 ```
 
 - SFC
 
 ```vue
 <template>
-  <div>hello</div>
+    <div>hello</div>
 </template>
 
 <script lang="ts" setup name="hello"></script>
 ```
-
 
 ## Options
 
@@ -52,7 +52,7 @@ export interface ExtendOptions {
     // Enable or not, the default is true
     // 是否启用, 默认true
     enable?: boolean
-    // Only files in the specified directory will take effect. 
+    // Only files in the specified directory will take effect.
     // If not specified, all files will take effect
     // 指定目录下的文件才会生效，如果不指定，则全部生效
     dirs?: string[]
@@ -63,4 +63,3 @@ export interface ExtendOptions {
     strategy?: 'dir' | 'file'
 }
 ```
-

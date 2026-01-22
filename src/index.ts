@@ -1,96 +1,199 @@
 import type { Plugin } from 'vite'
-import { parse, compileScript } from '@vue/compiler-sfc'
+import { parse } from '@vue/compiler-sfc'
 import MagicString from 'magic-string'
 import path from 'path'
 
-const scriptTemplate = (name: string | true, lang: string | true): string => {
-    return `<script ${lang ? `lang="${lang}"` : ''}>
-import { defineComponent } from 'vue'
-export default defineComponent({
-  name: '${name}',
-})
-</script>\n`
+const PLUGIN_NAME = 'vite:vue-setup-name'
+
+// Normalize path separators to avoid Windows / Unix differences
+// 统一路径分隔符，避免 Windows / Unix 不一致问题
+function normalizePath(p: string): string {
+    return p.replace(/\\/g, '/')
 }
 
-const getCode = (code: string, name: string | true, lang: string | true) => {
-    let s: MagicString | undefined
-    const str = () => s || (s = new MagicString(code))
-    if (name) {
-        str().appendLeft(0, scriptTemplate(name, lang))
-    }
+// Sanitize component name to avoid generating invalid JS strings
+// 对组件名做最小清洗，避免生成非法 JS 字符串
+function sanitizeComponentName(name: string): string {
+    return name
+        .normalize('NFKD')
+        .replace(/[^\w-]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '')
+}
+
+// Convert string to PascalCase
+// 将字符串转换为 PascalCase（仅首字母大写，其余保持原有大小写）
+function pascalCase(str: string): string {
+    return str
+        .split(/[-_/]/)
+        .filter(Boolean)
+        .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+        .join('')
+}
+
+// Create a normal <script> block with component name
+// 生成普通 <script> 块，用于补充组件 name
+function createScriptBlock(name: string, lang?: string): string {
+    const safeName = sanitizeComponentName(name)
+    const langAttr = lang ? ` lang="${lang}"` : ''
+
+    return (
+        `<script${langAttr}>\n` +
+        `import { defineComponent } from 'vue'\n\n` +
+        `export default defineComponent({\n` +
+        `  name: '${safeName}',\n` +
+        `})\n` +
+        `</script>\n`
+    )
+}
+
+// Inject generated <script> code at the specified position
+// 在指定位置注入生成的 <script> 代码
+function injectScript(code: string, insertPos: number, name: string, lang?: string) {
+    const s = new MagicString(code)
+    s.appendLeft(insertPos, createScriptBlock(name, lang))
     return {
-        map: str().generateMap(),
-        code: str().toString()
+        code: s.toString(),
+        map: s.generateMap({ hires: 'boundary' }),
     }
 }
 
-function supportVueSetupName(code: string, id: string, strategy?: string) {
+// Sanitize a path segment for component name
+// 清洗路径段：处理常见路由命名约定
+function sanitizeSegment(segment: string): string {
+    let name = segment
+
+    // catch-all [...xxx] 或 ...xxx → CatchAll
+    if (name.startsWith('[...') || name.startsWith('...')) {
+        name = 'CatchAll' + name.replace(/^\[*\.{3}/, '').replace(/]*$/, '')
+    }
+
+    // 去掉所有外层方括号 [[id]] → id
+    name = name.replace(/^\[+(.*?)]+$/g, '$1')
+
+    // 去掉分组括号 ((auth)) → auth
+    while (name.startsWith('(') && name.endsWith(')')) {
+        name = name.slice(1, -1)
+    }
+
+    // 去掉 @ 前缀
+    if (name.startsWith('@')) name = name.slice(1)
+
+    // 非法字符替换 & 合并连字符
+    name = name
+        .replace(/[^\w-]/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-+|-+$/g, '')
+
+    return pascalCase(name)
+}
+
+// Resolve component name based on strategy
+// 根据策略生成组件名
+function resolveNameByStrategy(
+    id: string,
+    strategy: 'file' | 'dir' | 'path',
+    root: string,
+): string | undefined {
+    const ext = path.extname(id)
+    const base = path.basename(id, ext)
+
+    switch (strategy) {
+        case 'file':
+            return base
+        case 'dir':
+            return path.basename(path.dirname(id))
+        case 'path': {
+            const rel = path.relative(root, id)
+            if (rel.startsWith('..') || path.isAbsolute(rel)) return undefined
+
+            const segments = rel
+                .replace(/\.vue$/, '')
+                .split(/[\\/]/)
+                .filter((s) => s && s.toLowerCase() !== 'index')
+                .map(sanitizeSegment)
+
+            if (segments.length === 0) return undefined
+            return segments.join('')
+        }
+    }
+}
+
+// Check whether the component name has already been declared explicitly
+// 判断是否已经显式声明过组件名
+function hasComponentName(code: string): boolean {
+    return (
+        /defineOptions\s*\(\s*{[\s\S]*?\bname\s*:/.test(code) ||
+        /defineComponent\s*\(\s*{[\s\S]*?\bname\s*:/.test(code) ||
+        /\bname\s*:\s*["'][^"']+["']\s*,?/.test(code)
+    )
+}
+
+// Core logic: inject component name for <script setup>
+// 核心逻辑：为 <script setup> 自动补充组件 name
+function supportVueSetupName(
+    code: string,
+    id: string,
+    strategy: 'file' | 'dir' | 'path',
+    root: string,
+    debug?: boolean,
+) {
     const { descriptor } = parse(code, { ignoreEmpty: false })
-    let lang:string | true = ''
-    if (!descriptor.script && descriptor.scriptSetup) {
-        const result = compileScript(descriptor, { id })
-        const name = result.attrs.name
-        lang = result.attrs.lang
-        if (name) {
-            return getCode(code, name, lang)
-        }
+
+    if (descriptor.script) return null
+    if (!descriptor.scriptSetup) return null
+    if (hasComponentName(code)) return null
+
+    const name = resolveNameByStrategy(id, strategy, root)
+    if (!name || name.length < 1) return null
+
+    // 插入位置：放在 <script setup> 结束前
+    let insertPos = descriptor.scriptSetup.loc.end.offset
+    const scriptEnd = '</script>'
+    if (code.slice(insertPos - scriptEnd.length, insertPos) === scriptEnd) {
+        insertPos -= scriptEnd.length
     }
 
-    if (strategy) {
-        switch (strategy) {
-            case 'dir':
-                return getCode(code, path.basename(path.dirname(id)), lang)
-            case 'file':
-                return getCode(code, path.basename(id).replace(path.extname(id), ''), lang)
-        }
+    const lang = descriptor.scriptSetup.lang
+
+    if (debug) {
+        const rel = path.relative(root, id).replace(/\\/g, '/')
+        console.log(`[${PLUGIN_NAME}] ${rel} -> ${sanitizeComponentName(name)}`)
     }
 
-    return null
+    return injectScript(code, insertPos, name, lang)
 }
 
 export interface ExtendOptions {
-    // Enable or not, the default is true
-    // 是否启用, 默认true
-    enable?: boolean
-    // Only files in the specified directory will take effect.
-    // If not specified, all files will take effect
-    // 指定目录下的文件才会生效，如果不指定，则全部生效
-    dirs?: string[]
-    // This parameter only takes effect when there is no attribute name.
-    // You can select a policy to generate the name according to the directory name or file name
-    // 当setup没有属性name时才会生效，
-    // 可以选择根据目录名生成名字或则根据文件名生成名字
-    strategy?: 'dir' | 'file'
+    enable?: boolean // 是否启用, 默认 true
+    dirs?: string[] // 指定目录下的文件才会生效，如果不指定，则全部生效
+    strategy?: 'file' | 'dir' | 'path' // 文件名、父目录名或路径策略，默认 path
+    debug?: boolean // 是否开启调试日志，打印文件与组件名映射
 }
 
-export default (options: ExtendOptions = {}): Plugin => {
-    const { enable = true, dirs, strategy = undefined } = options
+// Vite 插件入口
+export default function vueSetupName(options: ExtendOptions = {}): Plugin {
+    const { enable = true, dirs, strategy = 'path', debug = false } = options
 
-    // 将路径转成绝对路径
-    const newDirs = dirs?.map(value => {
-        return path.resolve(value)
-    })
+    const root = process.cwd()
+    const absoluteDirs = dirs?.map((d) => normalizePath(path.resolve(root, d)))
 
     return {
-        name: 'vite:vue-setup-name',
+        name: PLUGIN_NAME,
         enforce: 'pre',
-        async transform(code, id) {
-            if (!/\.vue$/.test(id)) {
+        transform(code, id) {
+            if (!enable || !id.endsWith('.vue')) return null
+
+            const normalizedId = normalizePath(id)
+
+            if (
+                absoluteDirs?.length &&
+                !absoluteDirs.some((dir) => normalizedId.startsWith(dir + '/'))
+            ) {
                 return null
             }
 
-            const ok = newDirs?.some(value => {
-                return id.indexOf(value) === 0
-            })
-
-            if (ok === false) {
-                return null
-            }
-
-            if (enable) {
-                return supportVueSetupName.call(this, code, id, strategy)
-            }
-            return null
-        }
+            return supportVueSetupName(code, normalizedId, strategy, root, debug)
+        },
     }
 }
