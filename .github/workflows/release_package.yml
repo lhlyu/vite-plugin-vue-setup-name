@@ -17,17 +17,15 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v5
 
-      - name: 安装 Pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
+      - name: 安装包子
+        uses: oven-sh/setup-bun@v2
 
       - name: 设置 Node 的版本
         uses: actions/setup-node@v5
         with:
           node-version: 25
           registry-url: 'https://registry.npmjs.org'
-          cache: 'pnpm'
+          cache: 'bun'
 
       - name: 获取当前的版本号
         run: |
@@ -42,13 +40,13 @@ jobs:
           echo "prerelease: ${{ env.prerelease }}"
 
       - name: 安装依赖
-        run: pnpm i
+        run: bun i
 
       - name: 构建代码
-        run: pnpm build
+        run: bun run build
 
       - name: 发布版本
-        run: pnpm publish --provenance --no-git-checks --access=public --tag ${{ env.tag }}
+        run: bun publish --provenance --no-git-checks --access=public --tag ${{ env.tag }}
         env:
           NODE_AUTH_TOKEN: '${{secrets.SECRET_NPM_TOKEN}}'
 
