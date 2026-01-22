@@ -40,7 +40,7 @@ jobs:
         run: bun run build
 
       - name: 发布版本
-        run: bun publish --tag ${{ env.tag }}
+        run: bunx npm publish --provenance --tag ${{ env.tag }}
 
       - name: 打个标签
         uses: ncipollo/release-action@v1
