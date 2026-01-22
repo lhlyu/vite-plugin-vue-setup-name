@@ -53,16 +53,20 @@ export default defineConfig({
 ```ts
 export interface ExtendOptions {
     // Enable or not, the default is true
-    // 是否启用, 默认true
+    // 是否启用, 默认 true
     enable?: boolean
     // Only files in the specified directory will take effect.
     // If not specified, all files will take effect
     // 指定目录下的文件才会生效，如果不指定，则全部生效
     dirs?: string[]
-    // This parameter only takes effect when there is no attribute name.
-    // You can select a policy to generate the name according to the directory name or file name
-    // 当setup没有属性name时才会生效，
-    // 可以选择根据目录名生成名字或则根据文件名生成名字
-    strategy?: 'dir' | 'file'
+    // Strategy to generate the name, the default is 'path'
+    // 生成组件名的策略，默认 'path'
+    // - 'file': Use the filename
+    // - 'dir': Use the parent directory name
+    // - 'path': Use the relative path from root
+    strategy?: 'file' | 'dir' | 'path'
+    // Whether to enable debug logs, printing file and component name mapping
+    // 是否开启调试日志，打印文件与组件名映射
+    debug?: boolean
 }
 ```
