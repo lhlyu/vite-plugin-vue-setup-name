@@ -20,6 +20,12 @@ jobs:
       - name: 安装包子
         uses: oven-sh/setup-bun@v2
 
+      - name: 设置 Node 的版本
+        uses: actions/setup-node@v5
+        with:
+          node-version: 25
+          registry-url: 'https://registry.npmjs.org'
+
       - name: 获取当前的版本号
         run: |
           echo "version=$(jq -r '.version' package.json)" >> "$GITHUB_ENV"
