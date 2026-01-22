@@ -3,7 +3,7 @@ name: Publish Package
 on:
   push:
     branches:
-      - main
+      - master
 
 jobs:
   publish:
@@ -17,12 +17,12 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v5
 
-      - name: 安装Pnpm
+      - name: 安装 Pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 10
 
-      - name: 设置Node的版本
+      - name: 设置 Node 的版本
         uses: actions/setup-node@v5
         with:
           node-version: 25
