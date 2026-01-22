@@ -49,9 +49,10 @@ function createScriptBlock(name: string, lang?: string): string {
 
 // Inject generated <script> code at the specified position
 // 在指定位置注入生成的 <script> 代码
-function injectScript(code: string, insertPos: number, name: string, lang?: string) {
+function injectScript(code: string, name: string, lang?: string) {
     const s = new MagicString(code)
-    s.appendLeft(insertPos, createScriptBlock(name, lang))
+    s.appendLeft(0, createScriptBlock(name, lang))
+
     return {
         code: s.toString(),
         map: s.generateMap({ hires: 'boundary' }),
@@ -147,13 +148,6 @@ function supportVueSetupName(
     const name = resolveNameByStrategy(id, strategy, root)
     if (!name || name.length < 1) return null
 
-    // 插入位置：放在 <script setup> 结束前
-    let insertPos = descriptor.scriptSetup.loc.end.offset
-    const scriptEnd = '</script>'
-    if (code.slice(insertPos - scriptEnd.length, insertPos) === scriptEnd) {
-        insertPos -= scriptEnd.length
-    }
-
     const lang = descriptor.scriptSetup.lang
 
     if (debug) {
@@ -161,14 +155,26 @@ function supportVueSetupName(
         console.log(`[${PLUGIN_NAME}] ${rel} -> ${sanitizeComponentName(name)}`)
     }
 
-    return injectScript(code, insertPos, name, lang)
+    return injectScript(code, name, lang)
 }
 
 export interface ExtendOptions {
-    enable?: boolean // 是否启用, 默认 true
-    dirs?: string[] // 指定目录下的文件才会生效，如果不指定，则全部生效
-    strategy?: 'file' | 'dir' | 'path' // 文件名、父目录名或路径策略，默认 path
-    debug?: boolean // 是否开启调试日志，打印文件与组件名映射
+    // Enable or not, the default is true
+    // 是否启用, 默认 true
+    enable?: boolean
+    // Only files in the specified directory will take effect.
+    // If not specified, all files will take effect
+    // 指定目录下的文件才会生效，如果不指定，则全部生效
+    dirs?: string[]
+    // Strategy to generate the name, the default is 'path'
+    // 生成组件名的策略，默认 'path'
+    // - 'file': Use the filename
+    // - 'dir': Use the parent directory name
+    // - 'path': Use the relative path from root
+    strategy?: 'file' | 'dir' | 'path'
+    // Whether to enable debug logs, printing file and component name mapping
+    // 是否开启调试日志，打印文件与组件名映射
+    debug?: boolean
 }
 
 // Vite 插件入口
