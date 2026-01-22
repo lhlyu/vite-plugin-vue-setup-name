@@ -1,5 +1,8 @@
 # vite-plugin-vue-setup-name
 
+[![npm](https://img.shields.io/npm/v/vite-plugin-vue-setup-name)](https://www.npmjs.com/package/vite-plugin-vue-setup-name)
+![Last Commit](https://img.shields.io/github/last-commit/lhlyu/vite-plugin-vue-setup-name)
+
 Make the vue script setup syntax support the name attribute
 
 使`vue setup`语法支持`name`属性

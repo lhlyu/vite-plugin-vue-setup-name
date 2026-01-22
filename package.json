@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-vue-setup-name",
-  "version": "0.0.3-beta.0",
+  "version": "0.0.3",
   "description": "Make the vue script setup syntax support the name attribute",
   "homepage": "https://github.com/lhlyu/vite-plugin-vue-setup-name",
   "bugs": {
