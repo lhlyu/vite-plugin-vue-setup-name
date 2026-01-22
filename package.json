@@ -6,6 +6,7 @@
   "bugs": {
     "url": "https://github.com/lhlyu/vite-plugin-vue-setup-name/issues"
   },
+  "repository": "https://github.com/lhlyu/vite-plugin-vue-setup-name.git",
   "license": "MIT",
   "author": "lhlyu",
   "files": [
