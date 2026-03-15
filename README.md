@@ -1,72 +1,182 @@
 # vite-plugin-vue-setup-name
 
+[English](./README.md) | [简体中文](./README.zh.md)
+
 [![npm](https://img.shields.io/npm/v/vite-plugin-vue-setup-name)](https://www.npmjs.com/package/vite-plugin-vue-setup-name)
 ![Last Commit](https://img.shields.io/github/last-commit/lhlyu/vite-plugin-vue-setup-name)
 
-Make the vue script setup syntax support the name attribute
+Add component `name` support for Vue SFCs that use `<script setup>`.
 
-使`vue setup`语法支持`name`属性
+## Features
+
+- Supports `<script setup name="MyComponent">`
+- Falls back to automatic name generation from file path when `name` is not provided
+- Respects existing names declared with `defineOptions({ name })` or normal `export default { name }`
+- Works with Vite project `root`, including monorepos and custom-root projects
+- Can inject `name` into an existing normal `<script>` when the default export is statically analyzable
+
+## Compatibility
+
+- Vite: `^7.0.0 || ^8.0.0`
+- Vue SFC compiler: `@vue/compiler-sfc ^3.5`
 
 ## Install
 
-`npm i -D vite-plugin-vue-setup-name`
+```bash
+npm i -D vite-plugin-vue-setup-name
+```
 
-`yarn add -D vite-plugin-vue-setup-name`
+```bash
+yarn add -D vite-plugin-vue-setup-name
+```
 
-`pnpm add -D vite-plugin-vue-setup-name`
+```bash
+pnpm add -D vite-plugin-vue-setup-name
+```
 
-`bun add -D vite-plugin-vue-setup-name`
+```bash
+bun add -D vite-plugin-vue-setup-name
+```
 
-## Usage
+## Quick Start
 
-- vite.config.ts
+`vite.config.ts`
 
 ```ts
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import VitePluginVueSetupName from 'vite-plugin-vue-setup-name'
+import vueSetupName from 'vite-plugin-vue-setup-name'
 
-// https://vitejs.dev/config/
 export default defineConfig({
     plugins: [
         vue(),
-        VitePluginVueSetupName({
-            enable: true,
+        vueSetupName({
             dirs: ['./src/components'],
         }),
     ],
 })
 ```
 
-- SFC
+`HelloCard.vue`
 
 ```vue
 <template>
     <div>hello</div>
 </template>
 
-<script lang="ts" setup name="hello"></script>
+<script setup lang="ts" name="HelloCard">
+const count = 1
+</script>
 ```
+
+## How It Works
+
+The plugin only adds a component name when the SFC does not already declare one.
+
+It checks in this order:
+
+1. Existing component name declared in the SFC
+2. `<script setup name="...">`
+3. Generated name from `strategy`
+
+If step 1 matches, the plugin does nothing and keeps the original code unchanged.
+
+Recognized existing name declarations:
+
+- `defineOptions({ name: 'MyComponent' })`
+- `export default { name: 'MyComponent' }`
+- `export default defineComponent({ name: 'MyComponent' })`
 
 ## Options
 
 ```ts
 export interface ExtendOptions {
-    // Enable or not, the default is true
-    // 是否启用, 默认 true
     enable?: boolean
-    // Only files in the specified directory will take effect.
-    // If not specified, all files will take effect
-    // 指定目录下的文件才会生效，如果不指定，则全部生效
     dirs?: string[]
-    // Strategy to generate the name, the default is 'path'
-    // 生成组件名的策略，默认 'path'
-    // - 'file': Use the filename
-    // - 'dir': Use the parent directory name
-    // - 'path': Use the relative path from root
     strategy?: 'file' | 'dir' | 'path'
-    // Whether to enable debug logs, printing file and component name mapping
-    // 是否开启调试日志，打印文件与组件名映射
     debug?: boolean
 }
 ```
+
+| Option     | Type                        | Default     | Description                                                       |
+| ---------- | --------------------------- | ----------- | ----------------------------------------------------------------- |
+| `enable`   | `boolean`                   | `true`      | Enable or disable the plugin                                      |
+| `dirs`     | `string[]`                  | `undefined` | Only run for files inside these directories                       |
+| `strategy` | `'file' \| 'dir' \| 'path'` | `'path'`    | Fallback strategy used when `<script setup name>` is not provided |
+| `debug`    | `boolean`                   | `false`     | Print file-to-name mapping logs during transform                  |
+
+## Strategy Examples
+
+Assume Vite `root = /project`:
+
+| File                                       | `strategy: 'file'` | `strategy: 'dir'` | `strategy: 'path'`    |
+| ------------------------------------------ | ------------------ | ----------------- | --------------------- |
+| `/project/src/components/foo-bar.vue`      | `foo-bar`          | `components`      | `SrcComponentsFooBar` |
+| `/project/src/pages/admin/users/index.vue` | `index`            | `users`           | `SrcPagesAdminUsers`  |
+| `/project/src/pages/[id].vue`              | `[id]`             | `pages`           | `SrcPagesId`          |
+
+`dirs` is resolved from the Vite project root, not `process.cwd()`.
+
+## Existing `<script>` Support
+
+If a file contains both `<script>` and `<script setup>`, the plugin can still inject
+`name` into the normal `<script>` when the default export is one of these forms:
+
+- `export default { ... }`
+- `export default defineComponent({ ... })`
+
+Example:
+
+```vue
+<script lang="ts">
+export default {
+    inheritAttrs: false,
+}
+</script>
+
+<script setup lang="ts" name="UserCard">
+const ready = true
+</script>
+```
+
+This will be transformed to a normal `<script>` that includes:
+
+```ts
+export default {
+    name: 'UserCard',
+    inheritAttrs: false,
+}
+```
+
+## Debug Output
+
+```ts
+vueSetupName({
+    debug: true,
+})
+```
+
+Example log:
+
+```txt
+[vite:vue-setup-name] src/components/HelloCard.vue -> HelloCard
+```
+
+## Notes
+
+- The plugin only processes `.vue` files.
+- When a normal `<script>` uses a dynamic or unsupported default export shape, the plugin skips it instead of rewriting unsafely.
+- The generated component name is sanitized before injection to avoid invalid output.
+- If you already prefer Vue's official `defineOptions({ name })`, this plugin will not override it.
+
+## Why Use This Plugin
+
+Vue already supports `defineOptions({ name })`, but some teams prefer a lighter SFC
+attribute style such as:
+
+```vue
+<script setup name="HelloCard"></script>
+```
+
+This plugin keeps that workflow available while still providing a safe fallback
+strategy for components without an explicit `name`.

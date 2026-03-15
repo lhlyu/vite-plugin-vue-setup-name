@@ -1,14 +1,31 @@
-import type { Plugin } from 'vite'
-import { parse } from '@vue/compiler-sfc'
+import { normalizePath, type Plugin, type ResolvedConfig } from 'vite'
+import { babelParse, parse, walk } from '@vue/compiler-sfc'
 import MagicString from 'magic-string'
 import path from 'path'
 
 const PLUGIN_NAME = 'vite:vue-setup-name'
+const VUE_SFC_RE = /\.vue$/
 
-// Normalize path separators to avoid Windows / Unix differences
-// 统一路径分隔符，避免 Windows / Unix 不一致问题
-function normalizePath(p: string): string {
-    return p.replace(/\\/g, '/')
+type NameStrategy = 'file' | 'dir' | 'path'
+type SFCDescriptor = ReturnType<typeof parse>['descriptor']
+type ScriptAst = ReturnType<typeof babelParse>
+type BabelParserPlugin = 'typescript' | 'jsx'
+
+// We only read a very small subset of the Babel AST. Keeping the shape local
+// avoids pulling in extra AST type dependencies just for a few fields.
+// 这里只读取极少量 Babel AST 字段，保持本地最小类型定义即可，避免为少量字段额外引入 AST 类型依赖。
+type ObjectExpressionNode = {
+    type: 'ObjectExpression'
+    properties: Array<{
+        type: string
+        key?: {
+            type: string
+            name?: string
+            value?: string
+        }
+        computed?: boolean
+    }>
+    start?: number | null
 }
 
 // Sanitize component name to avoid generating invalid JS strings
@@ -19,6 +36,17 @@ function sanitizeComponentName(name: string): string {
         .replace(/[^\w-]/g, '_')
         .replace(/_+/g, '_')
         .replace(/^_+|_+$/g, '')
+}
+
+// Normalize user input or strategy output into the final component name.
+// Empty strings are treated as "no usable name".
+// 统一收敛显式 name 和策略 name，空字符串视为无效名称。
+function normalizeComponentName(name?: string): string | undefined {
+    const trimmed = name?.trim()
+    if (!trimmed) return undefined
+
+    const safeName = sanitizeComponentName(trimmed)
+    return safeName || undefined
 }
 
 // Convert string to PascalCase
@@ -34,15 +62,13 @@ function pascalCase(str: string): string {
 // Create a normal <script> block with component name
 // 生成普通 <script> 块，用于补充组件 name
 function createScriptBlock(name: string, lang?: string): string {
-    const safeName = sanitizeComponentName(name)
     const langAttr = lang ? ` lang="${lang}"` : ''
 
     return (
         `<script${langAttr}>\n` +
-        `import { defineComponent } from 'vue'\n\n` +
-        `export default defineComponent({\n` +
-        `  name: '${safeName}',\n` +
-        `})\n` +
+        `export default {\n` +
+        `  name: ${JSON.stringify(name)},\n` +
+        `}\n` +
         `</script>\n`
     )
 }
@@ -57,6 +83,195 @@ function injectScript(code: string, name: string, lang?: string) {
         code: s.toString(),
         map: s.generateMap({ hires: 'boundary' }),
     }
+}
+
+// Inject `name` into an existing normal <script> block while preserving the
+// surrounding formatting as much as possible.
+// 在已有普通 <script> 中补 name，尽量保留原有缩进和格式。
+function injectNameIntoExistingScript(
+    code: string,
+    scriptContentStart: number,
+    scriptContent: string,
+    objectExpression: ObjectExpressionNode,
+    name: string,
+) {
+    if (typeof objectExpression.start !== 'number') return null
+
+    const lineStart = scriptContent.lastIndexOf('\n', objectExpression.start) + 1
+    const indent =
+        scriptContent.slice(lineStart, objectExpression.start).match(/^[ \t]*/)?.[0] ?? ''
+
+    const s = new MagicString(code)
+    s.appendLeft(
+        scriptContentStart + objectExpression.start + 1,
+        `\n${indent}  name: ${JSON.stringify(name)},`,
+    )
+
+    return {
+        code: s.toString(),
+        map: s.generateMap({ hires: 'boundary' }),
+    }
+}
+
+// Match Babel parser plugins to the SFC script language so AST detection works
+// for TS / TSX / JSX without changing runtime behavior.
+// 根据 script lang 选择 Babel parser 插件，让 TS / TSX / JSX 都能正确做 AST 检测。
+function getBabelParserPlugins(lang?: string): BabelParserPlugin[] {
+    const normalizedLang = lang?.toLowerCase()
+    const plugins: BabelParserPlugin[] = []
+
+    if (normalizedLang === 'ts' || normalizedLang === 'tsx') {
+        plugins.push('typescript')
+    }
+
+    if (normalizedLang === 'jsx' || normalizedLang === 'tsx') {
+        plugins.push('jsx')
+    }
+
+    return plugins
+}
+
+// Parsing failures are treated as "analysis unavailable". The plugin should
+// rather skip an unsafe rewrite than mutate code it cannot understand.
+// 解析失败时按“无法安全分析”处理：宁可跳过，也不要修改无法确认结构的代码。
+function parseScriptContent(code: string, lang?: string): ScriptAst | null {
+    try {
+        return babelParse(code, {
+            sourceType: 'module',
+            plugins: getBabelParserPlugins(lang),
+        })
+    } catch {
+        return null
+    }
+}
+
+// Vue / TS wrappers can hide the real expression node. Strip those wrappers so
+// later checks can focus on the actual object / call expression.
+// Vue / TS 会在表达式外包裹一层类型节点，这里统一剥离，便于后续只关注真实表达式。
+function unwrapExpression(node: any): any {
+    let current = node
+
+    while (current) {
+        switch (current.type) {
+            case 'ParenthesizedExpression':
+            case 'TSAsExpression':
+            case 'TSSatisfiesExpression':
+            case 'TSTypeAssertion':
+            case 'TSNonNullExpression':
+                current = current.expression
+                continue
+            default:
+                return current
+        }
+    }
+
+    return current
+}
+
+function isIdentifier(node: any, name: string): boolean {
+    return node?.type === 'Identifier' && node.name === name
+}
+
+// Only plain `name` keys are considered. Computed keys such as `[name]`
+// should not be treated as a stable component name declaration.
+// 这里只把静态 `name` 键视为组件名声明，像 `[name]` 这类计算属性不算。
+function getPropertyKeyName(property: {
+    type: string
+    key?: {
+        type: string
+        name?: string
+        value?: string
+    }
+    computed?: boolean
+}): string | undefined {
+    if (
+        (property.type !== 'ObjectProperty' && property.type !== 'ObjectMethod') ||
+        property.computed
+    ) {
+        return undefined
+    }
+
+    if (property.key?.type === 'Identifier') {
+        return property.key.name
+    }
+
+    if (property.key?.type === 'StringLiteral') {
+        return property.key.value
+    }
+
+    return undefined
+}
+
+function objectHasNameProperty(objectExpression: ObjectExpressionNode): boolean {
+    return objectExpression.properties.some((property) => getPropertyKeyName(property) === 'name')
+}
+
+// Only rewrite script blocks we can prove are safe:
+// - export default { ... }
+// - export default defineComponent({ ... })
+// Anything more dynamic is skipped to avoid corrupting user code.
+// 只处理两种可确认安全的默认导出：
+// - export default { ... }
+// - export default defineComponent({ ... })
+// 其余更动态的写法直接跳过，避免误改源码。
+function findComponentOptionsObject(scriptContent: string, lang?: string) {
+    const ast = parseScriptContent(scriptContent, lang)
+    if (!ast) return null
+
+    for (const statement of ast.program.body) {
+        if (statement.type !== 'ExportDefaultDeclaration') continue
+
+        const declaration = unwrapExpression(statement.declaration)
+
+        if (declaration?.type === 'ObjectExpression') {
+            return declaration as ObjectExpressionNode
+        }
+
+        if (!declaration || declaration.type !== 'CallExpression') return null
+        if (!isIdentifier(unwrapExpression(declaration.callee), 'defineComponent')) {
+            return null
+        }
+
+        const firstArgument = unwrapExpression(declaration.arguments[0])
+        if (firstArgument?.type === 'ObjectExpression') {
+            return firstArgument as ObjectExpressionNode
+        }
+
+        return null
+    }
+
+    return null
+}
+
+// Use AST detection first so local objects like `{ name: 'x' }` inside
+// `<script setup>` do not get mistaken for component options.
+// 优先走 AST 检测，避免把 `<script setup>` 里的普通对象 `{ name: 'x' }`
+// 误判成组件 name 声明。
+function scriptSetupHasDeclaredName(content: string, lang?: string): boolean {
+    const ast = parseScriptContent(content, lang)
+
+    if (!ast) {
+        return /defineOptions\s*\(\s*{[\s\S]*?\bname\s*:/.test(content)
+    }
+
+    let hasName = false
+
+    walk(ast.program, {
+        enter(node: any) {
+            if (hasName || node.type !== 'CallExpression') return
+            if (!isIdentifier(unwrapExpression(node.callee), 'defineOptions')) return
+
+            const firstArgument = unwrapExpression(node.arguments[0])
+            if (
+                firstArgument?.type === 'ObjectExpression' &&
+                objectHasNameProperty(firstArgument)
+            ) {
+                hasName = true
+            }
+        },
+    })
+
+    return hasName
 }
 
 // Sanitize a path segment for component name
@@ -93,7 +308,7 @@ function sanitizeSegment(segment: string): string {
 // 根据策略生成组件名
 function resolveNameByStrategy(
     id: string,
-    strategy: 'file' | 'dir' | 'path',
+    strategy: NameStrategy,
     root: string,
 ): string | undefined {
     const ext = path.extname(id)
@@ -120,14 +335,55 @@ function resolveNameByStrategy(
     }
 }
 
-// Check whether the component name has already been declared explicitly
-// 判断是否已经显式声明过组件名
-function hasComponentName(code: string): boolean {
+// Explicit `name=""` on `<script setup>` has higher priority than the fallback
+// path strategy so README behavior and implementation stay aligned.
+// `<script setup name=\"...\">` 的优先级高于策略生成名，确保实现与 README 保持一致。
+function resolveComponentName(
+    id: string,
+    strategy: NameStrategy,
+    root: string,
+    explicitName?: string,
+): string | undefined {
     return (
-        /defineOptions\s*\(\s*{[\s\S]*?\bname\s*:/.test(code) ||
-        /defineComponent\s*\(\s*{[\s\S]*?\bname\s*:/.test(code) ||
-        /\bname\s*:\s*["'][^"']+["']\s*,?/.test(code)
+        normalizeComponentName(explicitName) ??
+        normalizeComponentName(resolveNameByStrategy(id, strategy, root))
     )
+}
+
+// A component is considered already named only when the declaration is attached
+// to real component options, not anywhere in the file text.
+// 只有真正挂在组件 options 上的 name 才算“已声明”，不是文件里任意出现的 `name`。
+function hasDeclaredComponentName(descriptor: SFCDescriptor): boolean {
+    if (
+        descriptor.scriptSetup &&
+        scriptSetupHasDeclaredName(
+            descriptor.scriptSetup.content,
+            typeof descriptor.scriptSetup.lang === 'string'
+                ? descriptor.scriptSetup.lang
+                : undefined,
+        )
+    ) {
+        return true
+    }
+
+    if (!descriptor.script) return false
+
+    const componentOptions = findComponentOptionsObject(
+        descriptor.script.content,
+        typeof descriptor.script.lang === 'string' ? descriptor.script.lang : undefined,
+    )
+
+    return componentOptions ? objectHasNameProperty(componentOptions) : false
+}
+
+// Keep debug output readable across platforms by always printing normalized,
+// project-relative file paths.
+// 调试日志统一输出相对根目录的标准化路径，避免跨平台路径分隔符差异。
+function debugLog(debug: boolean, root: string, id: string, message: string) {
+    if (!debug) return
+
+    const relativePath = normalizePath(path.relative(root, id))
+    console.log(`[${PLUGIN_NAME}] ${relativePath} ${message}`)
 }
 
 // Core logic: inject component name for <script setup>
@@ -135,27 +391,49 @@ function hasComponentName(code: string): boolean {
 function supportVueSetupName(
     code: string,
     id: string,
-    strategy: 'file' | 'dir' | 'path',
+    strategy: NameStrategy,
     root: string,
-    debug?: boolean,
+    debug: boolean,
 ) {
-    const { descriptor } = parse(code, { ignoreEmpty: false })
+    const { descriptor } = parse(code, { filename: id, ignoreEmpty: false })
 
-    if (descriptor.script) return null
     if (!descriptor.scriptSetup) return null
-    if (hasComponentName(code)) return null
+    if (hasDeclaredComponentName(descriptor)) return null
 
-    const name = resolveNameByStrategy(id, strategy, root)
-    if (!name || name.length < 1) return null
+    const explicitName =
+        typeof descriptor.scriptSetup.attrs.name === 'string'
+            ? descriptor.scriptSetup.attrs.name
+            : undefined
+    const name = resolveComponentName(id, strategy, root, explicitName)
+    if (!name) return null
 
-    const lang = descriptor.scriptSetup.lang
+    if (descriptor.script) {
+        const componentOptions = findComponentOptionsObject(
+            descriptor.script.content,
+            typeof descriptor.script.lang === 'string' ? descriptor.script.lang : undefined,
+        )
 
-    if (debug) {
-        const rel = path.relative(root, id).replace(/\\/g, '/')
-        console.log(`[${PLUGIN_NAME}] ${rel} -> ${sanitizeComponentName(name)}`)
+        if (!componentOptions) {
+            debugLog(debug, root, id, 'skipped: unsupported default export in <script>')
+            return null
+        }
+
+        debugLog(debug, root, id, `-> ${name} (updated existing <script>)`)
+        return injectNameIntoExistingScript(
+            code,
+            descriptor.script.loc.start.offset,
+            descriptor.script.content,
+            componentOptions,
+            name,
+        )
     }
 
-    return injectScript(code, name, lang)
+    debugLog(debug, root, id, `-> ${name}`)
+    return injectScript(
+        code,
+        name,
+        typeof descriptor.scriptSetup.lang === 'string' ? descriptor.scriptSetup.lang : undefined,
+    )
 }
 
 export interface ExtendOptions {
@@ -171,7 +449,7 @@ export interface ExtendOptions {
     // - 'file': Use the filename
     // - 'dir': Use the parent directory name
     // - 'path': Use the relative path from root
-    strategy?: 'file' | 'dir' | 'path'
+    strategy?: NameStrategy
     // Whether to enable debug logs, printing file and component name mapping
     // 是否开启调试日志，打印文件与组件名映射
     debug?: boolean
@@ -181,25 +459,48 @@ export interface ExtendOptions {
 export default function vueSetupName(options: ExtendOptions = {}): Plugin {
     const { enable = true, dirs, strategy = 'path', debug = false } = options
 
-    const root = process.cwd()
-    const absoluteDirs = dirs?.map((d) => normalizePath(path.resolve(root, d)))
+    let root = process.cwd()
+    let absoluteDirs = resolveDirs(dirs, root)
 
     return {
         name: PLUGIN_NAME,
         enforce: 'pre',
-        transform(code, id) {
-            if (!enable || !id.endsWith('.vue')) return null
 
-            const normalizedId = normalizePath(id)
+        // Resolve the real Vite root instead of relying on process.cwd().
+        // This keeps monorepos and custom-root projects working correctly.
+        // 使用 Vite 真正解析后的 root，而不是 process.cwd()，确保 monorepo / 自定义 root 正常工作。
+        configResolved(config: ResolvedConfig) {
+            root = config.root
+            absoluteDirs = resolveDirs(dirs, root)
+        },
 
-            if (
-                absoluteDirs?.length &&
-                !absoluteDirs.some((dir) => normalizedId.startsWith(dir + '/'))
-            ) {
-                return null
-            }
+        // Vite 6.3+ supports hook filters. We still keep the runtime guard in
+        // the handler so behavior stays correct if the filter is bypassed.
+        // Vite 6.3+ 支持 hook filter；这里仍保留 handler 内的运行时判断，避免过滤器失效时行为异常。
+        transform: {
+            filter: {
+                id: VUE_SFC_RE,
+            },
+            handler(code, id) {
+                const normalizedId = normalizePath(id)
 
-            return supportVueSetupName(code, normalizedId, strategy, root, debug)
+                if (!enable || !VUE_SFC_RE.test(normalizedId)) return null
+
+                if (
+                    absoluteDirs?.length &&
+                    !absoluteDirs.some(
+                        (dir) => normalizedId === dir || normalizedId.startsWith(`${dir}/`),
+                    )
+                ) {
+                    return null
+                }
+
+                return supportVueSetupName(code, id, strategy, root, debug)
+            },
         },
     }
+}
+
+function resolveDirs(dirs: string[] | undefined, root: string): string[] | undefined {
+    return dirs?.map((dir) => normalizePath(path.resolve(root, dir)))
 }
