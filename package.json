@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-vue-setup-name",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "Make the vue script setup syntax support the name attribute",
   "homepage": "https://github.com/lhlyu/vite-plugin-vue-setup-name",
   "bugs": {
@@ -14,12 +14,17 @@
   ],
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
-  "types": "./dist/index.d.ts",
+  "types": "./dist/index.d.cts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     }
   },
   "scripts": {
@@ -27,23 +32,23 @@
     "fmt:check": "oxfmt --check",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
-    "dev": "unbuild --stub",
-    "build": "unbuild",
+    "dev": "tsdown --watch",
+    "build": "tsdown",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vue/compiler-sfc": "^3.5.30",
-    "magic-string": "^0.30.21"
+    "@vue/compiler-sfc": "^3.5.40",
+    "magic-string": "^1.0.0"
   },
   "devDependencies": {
-    "@types/node": "^25.5.0",
-    "oxfmt": "^0.42.0",
-    "oxlint": "^1.57.0",
-    "typescript": "^6.0.2",
-    "unbuild": "^3.6.1",
-    "vite": "^8.0.2",
-    "vitest": "^4.1.1"
+    "@types/node": "^26.1.1",
+    "oxfmt": "^0.59.0",
+    "oxlint": "^1.74.0",
+    "tsdown": "^0.22.9",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
   },
   "peerDependencies": {
     "vite": "^7.0.0 || ^8.0.0"
