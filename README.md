@@ -87,10 +87,12 @@ Recognized existing name declarations:
 - `export default { name: 'MyComponent' }`
 - `export default defineComponent({ name: 'MyComponent' })`
 
+Static computed keys such as `['name']` are also recognized.
+
 ## Options
 
 ```ts
-export interface ExtendOptions {
+interface ExtendOptions {
     enable?: boolean
     dirs?: string[]
     strategy?: 'file' | 'dir' | 'path'
@@ -113,9 +115,15 @@ Assume Vite `root = /project`:
 | ------------------------------------------ | ------------------ | ----------------- | --------------------- |
 | `/project/src/components/foo-bar.vue`      | `foo-bar`          | `components`      | `SrcComponentsFooBar` |
 | `/project/src/pages/admin/users/index.vue` | `index`            | `users`           | `SrcPagesAdminUsers`  |
-| `/project/src/pages/[id].vue`              | `[id]`             | `pages`           | `SrcPagesId`          |
+| `/project/src/pages/[id].vue`              | `id`               | `pages`           | `SrcPagesId`          |
+| `/project/src/index/Foo.vue`               | `Foo`              | `index`           | `SrcIndexFoo`         |
+| `/project/...slug.vue`                     | `slug`             | `project`         | `CatchAllslug`        |
 
 `dirs` is resolved from the Vite project root, not `process.cwd()`.
+
+With the `path` strategy, only a trailing `index` filename is omitted; an
+intermediate `index` directory is kept. Common route segments such as `[id]`,
+`[...slug]`, grouping parentheses, and `@` prefixes are normalized.
 
 ## Existing `<script>` Support
 
@@ -124,6 +132,9 @@ If a file contains both `<script>` and `<script setup>`, the plugin can still in
 
 - `export default { ... }`
 - `export default defineComponent({ ... })`
+
+Objects containing spreads or non-literal computed keys are skipped because
+they may introduce or overwrite `name` at runtime.
 
 Example:
 
@@ -166,7 +177,7 @@ Example log:
 
 - The plugin only processes `.vue` files.
 - When a normal `<script>` uses a dynamic or unsupported default export shape, the plugin skips it instead of rewriting unsafely.
-- The generated component name is sanitized before injection to avoid invalid output.
+- Generated component names are sanitized before injection; an explicit `<script setup name="...">` value is trimmed and otherwise preserved.
 - If you already prefer Vue's official `defineOptions({ name })`, this plugin will not override it.
 
 ## Why Use This Plugin

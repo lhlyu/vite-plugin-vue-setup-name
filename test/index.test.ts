@@ -39,6 +39,19 @@ const count = 1
         expect(result).not.toContain('SrcComponentsFooCard')
     })
 
+    it('preserves unicode characters in an explicit component name', async () => {
+        const id = path.join(DEFAULT_ROOT, 'src/components/FooCard.vue')
+        const code = `
+<template><div /></template>
+<script setup name="中文组件"></script>
+`
+
+        const result = await transformVue(code, id, { strategy: 'file' })
+
+        expect(result).toContain('name: "中文组件"')
+        expect(result).not.toContain('name: "FooCard"')
+    })
+
     it('does not treat ordinary object properties as an existing component name', async () => {
         const id = path.join(DEFAULT_ROOT, 'src/components/MyWidget.vue')
         const code = `
@@ -63,6 +76,33 @@ const meta = { name: 'local-value' }
         const result = await transformVue(code, id, { strategy: 'path' })
 
         expect(result).toContain('name: "SrcPagesAdminUsers"')
+    })
+
+    it('keeps index when it is an intermediate path segment', async () => {
+        const nestedIndexId = path.join(DEFAULT_ROOT, 'src/index/Foo.vue')
+        const directId = path.join(DEFAULT_ROOT, 'src/Foo.vue')
+        const code = `
+<template><div /></template>
+<script setup></script>
+`
+
+        const nestedIndexResult = await transformVue(code, nestedIndexId, { strategy: 'path' })
+        const directResult = await transformVue(code, directId, { strategy: 'path' })
+
+        expect(nestedIndexResult).toContain('name: "SrcIndexFoo"')
+        expect(directResult).toContain('name: "SrcFoo"')
+    })
+
+    it('does not reject an in-root filename that starts with dots', async () => {
+        const id = path.join(DEFAULT_ROOT, '...slug.vue')
+        const code = `
+<template><div /></template>
+<script setup></script>
+`
+
+        const result = await transformVue(code, id, { strategy: 'path' })
+
+        expect(result).toContain('name: "CatchAllslug"')
     })
 
     it('uses the resolved Vite root for dirs filtering', async () => {
@@ -138,6 +178,59 @@ export default {
 <script setup>
 const ready = true
 </script>
+`
+
+        const result = await transformVue(code, id, { strategy: 'file' })
+
+        expect(result).toBeNull()
+    })
+
+    it('recognizes a static computed component name', async () => {
+        const id = path.join(DEFAULT_ROOT, 'src/components/HelloCard.vue')
+        const code = `
+<script>
+export default {
+  ['name']: 'ExistingCard',
+}
+</script>
+<template><div /></template>
+<script setup></script>
+`
+
+        const result = await transformVue(code, id, { strategy: 'file' })
+
+        expect(result).toBeNull()
+    })
+
+    it('skips an existing script with dynamic component options', async () => {
+        const id = path.join(DEFAULT_ROOT, 'src/components/HelloCard.vue')
+        const code = `
+<script>
+const base = {}
+export default {
+  ...base,
+}
+</script>
+<template><div /></template>
+<script setup name="HelloCard"></script>
+`
+
+        const result = await transformVue(code, id, { strategy: 'file' })
+
+        expect(result).toBeNull()
+    })
+
+    it('skips an existing script with a non-literal computed option', async () => {
+        const id = path.join(DEFAULT_ROOT, 'src/components/HelloCard.vue')
+        const code = `
+<script>
+const key = 'inheritAttrs'
+export default {
+  [key]: false,
+}
+</script>
+<template><div /></template>
+<script setup name="HelloCard"></script>
 `
 
         const result = await transformVue(code, id, { strategy: 'file' })

@@ -28,8 +28,8 @@ type ObjectExpressionNode = {
     start?: number | null
 }
 
-// Sanitize component name to avoid generating invalid JS strings
-// 对组件名做最小清洗，避免生成非法 JS 字符串
+// Sanitize generated component names into a stable naming convention.
+// 对自动生成的组件名做最小清洗，保持稳定的命名格式。
 function sanitizeComponentName(name: string): string {
     return name
         .normalize('NFKD')
@@ -38,10 +38,10 @@ function sanitizeComponentName(name: string): string {
         .replace(/^_+|_+$/g, '')
 }
 
-// Normalize user input or strategy output into the final component name.
-// Empty strings are treated as "no usable name".
-// 统一收敛显式 name 和策略 name，空字符串视为无效名称。
-function normalizeComponentName(name?: string): string | undefined {
+// Normalize a generated component name. Explicit names are preserved because
+// they are safely serialized with JSON.stringify when injected.
+// 清洗自动生成的组件名；显式 name 由 JSON.stringify 安全输出，不改写其内容。
+function normalizeGeneratedComponentName(name?: string): string | undefined {
     const trimmed = name?.trim()
     if (!trimmed) return undefined
 
@@ -172,9 +172,9 @@ function isIdentifier(node: any, name: string): boolean {
     return node?.type === 'Identifier' && node.name === name
 }
 
-// Only plain `name` keys are considered. Computed keys such as `[name]`
-// should not be treated as a stable component name declaration.
-// 这里只把静态 `name` 键视为组件名声明，像 `[name]` 这类计算属性不算。
+// Only statically known `name` keys are considered. Literal `['name']` is
+// stable, while dynamic keys such as `[key]` are not.
+// 只把可静态确定的 name 键视为组件名；`['name']` 有效，`[key]` 不算。
 function getPropertyKeyName(property: {
     type: string
     key?: {
@@ -184,14 +184,11 @@ function getPropertyKeyName(property: {
     }
     computed?: boolean
 }): string | undefined {
-    if (
-        (property.type !== 'ObjectProperty' && property.type !== 'ObjectMethod') ||
-        property.computed
-    ) {
+    if (property.type !== 'ObjectProperty' && property.type !== 'ObjectMethod') {
         return undefined
     }
 
-    if (property.key?.type === 'Identifier') {
+    if (!property.computed && property.key?.type === 'Identifier') {
         return property.key.name
     }
 
@@ -204,6 +201,17 @@ function getPropertyKeyName(property: {
 
 function objectHasNameProperty(objectExpression: ObjectExpressionNode): boolean {
     return objectExpression.properties.some((property) => getPropertyKeyName(property) === 'name')
+}
+
+// Spreads and non-literal computed keys may introduce or overwrite `name` at
+// runtime, so injecting into such objects is not provably safe.
+// 展开属性和非字面量计算属性可能在运行时引入或覆盖 name，因此不做冒险注入。
+function objectCanSafelyReceiveName(objectExpression: ObjectExpressionNode): boolean {
+    return !objectExpression.properties.some(
+        (property) =>
+            property.type === 'SpreadElement' ||
+            (property.computed && property.key?.type !== 'StringLiteral'),
+    )
 }
 
 // Only rewrite script blocks we can prove are safe:
@@ -321,13 +329,20 @@ function resolveNameByStrategy(
             return path.basename(path.dirname(id))
         case 'path': {
             const rel = path.relative(root, id)
-            if (rel.startsWith('..') || path.isAbsolute(rel)) return undefined
+            if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+                return undefined
+            }
 
-            const segments = rel
+            const rawSegments = rel
                 .replace(/\.vue$/, '')
                 .split(/[\\/]/)
-                .filter((s) => s && s.toLowerCase() !== 'index')
-                .map(sanitizeSegment)
+                .filter(Boolean)
+
+            if (rawSegments[rawSegments.length - 1]?.toLowerCase() === 'index') {
+                rawSegments.pop()
+            }
+
+            const segments = rawSegments.map(sanitizeSegment).filter(Boolean)
 
             if (segments.length === 0) return undefined
             return segments.join('')
@@ -344,10 +359,10 @@ function resolveComponentName(
     root: string,
     explicitName?: string,
 ): string | undefined {
-    return (
-        normalizeComponentName(explicitName) ??
-        normalizeComponentName(resolveNameByStrategy(id, strategy, root))
-    )
+    const normalizedExplicitName = explicitName?.trim()
+    if (normalizedExplicitName) return normalizedExplicitName
+
+    return normalizeGeneratedComponentName(resolveNameByStrategy(id, strategy, root))
 }
 
 // A component is considered already named only when the declaration is attached
@@ -418,6 +433,11 @@ function supportVueSetupName(
             return null
         }
 
+        if (!objectCanSafelyReceiveName(componentOptions)) {
+            debugLog(debug, root, id, 'skipped: dynamic properties in component options')
+            return null
+        }
+
         debugLog(debug, root, id, `-> ${name} (updated existing <script>)`)
         return injectNameIntoExistingScript(
             code,
@@ -436,7 +456,7 @@ function supportVueSetupName(
     )
 }
 
-export interface ExtendOptions {
+interface ExtendOptions {
     // Enable or not, the default is true
     // 是否启用, 默认 true
     enable?: boolean

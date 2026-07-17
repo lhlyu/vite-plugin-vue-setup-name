@@ -87,10 +87,12 @@ const count = 1
 - `export default { name: 'MyComponent' }`
 - `export default defineComponent({ name: 'MyComponent' })`
 
+静态计算属性 `['name']` 也可以被识别。
+
 ## 配置项
 
 ```ts
-export interface ExtendOptions {
+interface ExtendOptions {
     enable?: boolean
     dirs?: string[]
     strategy?: 'file' | 'dir' | 'path'
@@ -113,9 +115,13 @@ export interface ExtendOptions {
 | ------------------------------------------ | ------------------ | ----------------- | --------------------- |
 | `/project/src/components/foo-bar.vue`      | `foo-bar`          | `components`      | `SrcComponentsFooBar` |
 | `/project/src/pages/admin/users/index.vue` | `index`            | `users`           | `SrcPagesAdminUsers`  |
-| `/project/src/pages/[id].vue`              | `[id]`             | `pages`           | `SrcPagesId`          |
+| `/project/src/pages/[id].vue`              | `id`               | `pages`           | `SrcPagesId`          |
+| `/project/src/index/Foo.vue`               | `Foo`              | `index`           | `SrcIndexFoo`         |
+| `/project/...slug.vue`                     | `slug`             | `project`         | `CatchAllslug`        |
 
 `dirs` 的解析基于 Vite 项目根目录，而不是 `process.cwd()`。
+
+使用 `path` 策略时，只会忽略末尾的 `index` 文件名，中间的 `index` 目录仍会保留。`[id]`、`[...slug]`、分组括号和 `@` 前缀等常见路由片段会被规范化。
 
 ## 已有 `<script>` 的支持情况
 
@@ -123,6 +129,8 @@ export interface ExtendOptions {
 
 - `export default { ... }`
 - `export default defineComponent({ ... })`
+
+如果对象包含展开属性或非字面量计算属性，插件会跳过处理，因为它们可能在运行时引入或覆盖 `name`。
 
 示例：
 
@@ -165,7 +173,7 @@ vueSetupName({
 
 - 插件只处理 `.vue` 文件。
 - 如果普通 `<script>` 使用了动态或不受支持的默认导出形态，插件会跳过，而不是进行不安全改写。
-- 注入前会对组件名做清洗，避免生成非法输出。
+- 自动生成的组件名会在注入前进行清洗；显式 `<script setup name="...">` 的值仅去除首尾空白，其余内容保持不变。
 - 如果你已经使用 Vue 官方的 `defineOptions({ name })`，插件不会覆盖它。
 
 ## 为什么需要这个插件
